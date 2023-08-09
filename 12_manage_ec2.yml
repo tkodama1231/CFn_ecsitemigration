@@ -1,0 +1,202 @@
+---
+## Type "host" "username" "password" from the RDS secret at line 119
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-vpc
+## 2. ${SystemName}-elb
+## 3. ${SystemName}-iam-role
+## 4. ${SystemName}-rds
+## 5. ${SystemName}-elasticache
+## 6. ${SystemName}-efs
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create Manage EC2 AutoScaling Group etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+  EC2ImageId:
+    Description: >
+      Specifies the AMI ID for your instances.
+      https://aws.amazon.com/jp/blogs/news/query-for-the-latest-amazon-linux-ami-ids-using-aws-systems-manager-parameter-store/
+      https://ap-northeast-1.console.aws.amazon.com/systems-manager/parameters/aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-ebs/description?region=ap-northeast-1
+      e.g. amzn2-ami-kernel-5.10-hvm-2.0.20230404.1-x86_64-ebs
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-ebs
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Parameters:
+          - SystemName
+          - EC2ImageId
+
+Resources:
+  ## EC2: manageEC2 Security Group
+  ManageEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${SystemName}-manageec2-sg
+      GroupDescription: !Sub ${SystemName}-manageec2-sg
+      VpcId:
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub ${SystemName}-elb-ELBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-manageec2-sg
+
+  ## EC2(VPC): RDS Security Group Inbound Rule From Manage EC2 (Aurora/Mysql)
+  EC2SecurityGroupIngressAurora:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub ${SystemName}-rds-RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref ManageEC2SecurityGroup
+
+  ## EC2(VPC): Elasticache Security Group Inbound Rule From Manage EC2 (Redis)
+  EC2SecurityGroupIngressRedis:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub ${SystemName}-elasticache-ElastiCacheSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      SourceSecurityGroupId: !Ref ManageEC2SecurityGroup
+
+  ## EC2(VPC): EFS Security Group Inbound Rule From Contents EC2 (NFS)
+  EC2SecurityGroupIngressNFS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub ${SystemName}-efs-EFSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref ManageEC2SecurityGroup
+
+  ## EC2: Manage EC2 Launch template
+  ManageLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${SystemName}-manageec2-launchtemplate
+      LaunchTemplateData:
+        ImageId: !Ref EC2ImageId
+        InstanceType: t2.micro
+        IamInstanceProfile:
+          Name: 
+            Fn::ImportValue: !Sub ${SystemName}-iam-role-ManageEC2IAMInstanceProfile
+        SecurityGroupIds:
+          - !Ref ManageEC2SecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${SystemName}-manageec2-launchtemplate
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum -y update
+            aws configure set default.region ${AWS::Region}
+            ## Install Docker Engine
+            amazon-linux-extras install docker -y
+            systemctl enable docker.service
+            systemctl start docker.service
+            ## Install Docker Compose
+            CLI_DIR=/usr/local/lib/docker/cli-plugins
+            LATEST_RELEASE=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep browser_download_url | grep -i $(uname -s)-$(uname -m) | grep -v sha256 | cut -d : -f 2,3 | tr -d \")
+            mkdir -p ${!CLI_DIR}
+            curl -sL ${!LATEST_RELEASE} -o ${!CLI_DIR}/docker-compose
+            chmod +x ${!CLI_DIR}/docker-compose
+            ln -s ${!CLI_DIR}/docker-compose /usr/bin/docker-compose
+            ## Run Docker Container
+            docker container run --name nginx --restart=always -d -p 80:80 nginx
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 8
+              VolumeType: gp3
+
+  ## EC2: Manage EC2 TargetGroup
+  ManageTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      Name: !Sub ${SystemName}-manageec2-tg
+      Port: 80
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher: 
+        HttpCode: 200
+      Tags: 
+        - Key: Name
+          Value: !Sub ${SystemName}-manageec2-tg
+
+  ## EC2: Manage EC2 Auto Scaling group
+  ManageAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${SystemName}-manageec2-autoscalinggroup
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetProtectedA
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ManageLaunchTemplate
+        Version: !GetAtt ManageLaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref ManageTargetGroup
+      DesiredCapacity: 1
+      MaxSize: 1
+      MinSize: 1
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-asg-manageec2
+          PropagateAtLaunch: true
+
+Outputs:
+  ## EC2: manageEC2 Security Group
+  ManageEC2SecurityGroup:
+    Value: !Ref ManageEC2SecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2SecurityGroup
+
+  ManageEC2SecurityGroupVpcId:
+    Value: !GetAtt ManageEC2SecurityGroup.VpcId
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2SecurityGroupVpcId
+
+  ## EC2: Manage EC2 Launch template
+  ManageLaunchTemplate:
+    Value: !Ref ManageLaunchTemplate 
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageLaunchTemplate
+
+  ## EC2: Manage EC2 TargetGroup
+  ManageTargetGroup:
+    Value: !Ref ManageTargetGroup 
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageTargetGroup
+
+  ManageTargetGroupFullName:
+    Value: !GetAtt ManageTargetGroup.TargetGroupFullName
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageTargetGroupFullName
+
+  ## EC2: Manage EC2 Auto Scaling group
+  ManageAutoScalingGroup:
+    Value: !Ref ManageAutoScalingGroup 
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageAutoScalingGroup
+
+
+

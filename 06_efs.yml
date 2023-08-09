@@ -1,0 +1,108 @@
+---
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-vpc
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create EFS etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+
+Resources:
+  ## EC2(VPC): Security Group
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${SystemName}-efs-sg
+      GroupDescription: !Sub ${SystemName}-efs-sg
+      VpcId:
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-efs-sg
+
+  ## EFS: FileSystem
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties: 
+      Encrypted: True
+      PerformanceMode: generalPurpose
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub ${SystemName}-efs-filesystem
+
+  ## EFS: MountTarget in AZ-a
+  MountTargetAZa:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: 
+        Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetProtectedA
+      SecurityGroups: 
+        - !Ref EFSSecurityGroup
+
+  ## EFS: MountTarget in AZ-c
+  MountTargetAZc:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: 
+        Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetProtectedC
+      SecurityGroups: 
+        - !Ref EFSSecurityGroup
+
+Outputs:
+  ## EC2(VPC): Security Group
+  EFSSecurityGroup:
+    Value: !Ref EFSSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-EFSSecurityGroup
+
+  EFSSecurityGroupVpcId:
+    Value: !GetAtt EFSSecurityGroup.VpcId
+    Export:
+      Name: !Sub ${AWS::StackName}-EFSSecurityGroupVpcId
+
+  ## EFS: FileSystem
+  FileSystem:
+    Value: !Ref FileSystem
+    Export:
+      Name: !Sub ${AWS::StackName}-FileSystem
+
+  FileSystemArn:
+    Value: !GetAtt FileSystem.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-FileSystemArn
+
+  ## EFS: MountTarget in AZ-a
+  MountTargetAZa:
+    Value: !Ref MountTargetAZa
+    Export:
+      Name: !Sub ${AWS::StackName}-MountTargetAZa
+
+  MountTargetAZaIpAdress:
+    Value: !GetAtt MountTargetAZa.IpAddress
+    Export:
+      Name: !Sub ${AWS::StackName}-MountTargetAZaIpAddress
+
+  ## EFS: MountTarget in AZ-c
+  MountTargetAZc:
+    Value: !Ref MountTargetAZc
+    Export:
+      Name: !Sub ${AWS::StackName}-MountTargetAZc
+
+  MountTargetAZcIpAdress:
+    Value: !GetAtt MountTargetAZa.IpAddress
+    Export:
+      Name: !Sub ${AWS::StackName}-MountTargetAZcIpAddress
+
+
+
+
+
+  
+
+  
+

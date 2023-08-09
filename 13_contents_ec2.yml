@@ -1,0 +1,327 @@
+---
+## Type "host" "username" "password" from the RDS secret at line 121
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-vpc
+## 2. ${SystemName}-elb
+## 3. ${SystemName}-iam-role
+## 4. ${SystemName}-certificatemanager
+## 5. ${SystemName}-rds
+## 6. ${SystemName}-elasticache
+## 7. ${SystemName}-efs
+## 8. ${SystemName}-manageec2
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create Contents EC2 AutoScaling Group etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+  EC2ImageId:
+    Description: >
+      Specifies the AMI ID for your instances.
+      https://aws.amazon.com/jp/blogs/news/query-for-the-latest-amazon-linux-ami-ids-using-aws-systems-manager-parameter-store/
+      https://ap-northeast-1.console.aws.amazon.com/systems-manager/parameters/aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-ebs/description?region=ap-northeast-1
+      e.g. amzn2-ami-kernel-5.10-hvm-2.0.20230404.1-x86_64-ebs
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-ebs
+  ManageEC2UrlPath:
+    Description: URL path for routing to the manage EC2
+    Type: String
+    Default: manage
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Parameters:
+          - SystemName
+          - EC2ImageId
+          - ManageEC2UrlPath
+
+Resources:
+  ## EC2: contentsEC2 Security Group
+  ContentsEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${SystemName}-contentsec2-sg
+      GroupDescription: !Sub ${SystemName}-contentsec2-sg
+      VpcId:
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub ${SystemName}-elb-ELBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-contentsec2-sg
+
+  ## EC2(VPC): RDS Security Group Inbound Rule From Contents EC2 (Aurora/Mysql)
+  EC2SecurityGroupIngressAurora:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub ${SystemName}-rds-RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref ContentsEC2SecurityGroup
+
+  ## EC2(VPC): Elasticache Security Group Inbound Rule From Contents EC2 (Redis)
+  EC2SecurityGroupIngressRedis:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub ${SystemName}-elasticache-ElastiCacheSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      SourceSecurityGroupId: !Ref ContentsEC2SecurityGroup
+
+  ## EC2(VPC): EFS Security Group Inbound Rule From Contents EC2 (NFS)
+  EC2SecurityGroupIngressNFS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub ${SystemName}-efs-EFSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref ContentsEC2SecurityGroup
+
+  ## EC2: Contents EC2 Launch template
+  ContentsLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${SystemName}-contentsec2-launchtemplate
+      LaunchTemplateData:
+        ImageId: !Ref EC2ImageId
+        InstanceType: t2.micro
+        IamInstanceProfile:
+          Name: 
+            Fn::ImportValue: !Sub ${SystemName}-iam-role-EC2IAMInstanceProfile
+        SecurityGroupIds:
+          - !Ref ContentsEC2SecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${SystemName}-contentsec2-launchtemplate
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum -y update
+            aws configure set default.region ${AWS::Region}
+            ## Install Docker Engine
+            amazon-linux-extras install docker -y
+            systemctl enable docker.service
+            systemctl start docker.service
+            ## Install Docker Compose
+            CLI_DIR=/usr/local/lib/docker/cli-plugins
+            LATEST_RELEASE=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep browser_download_url | grep -i $(uname -s)-$(uname -m) | grep -v sha256 | cut -d : -f 2,3 | tr -d \")
+            mkdir -p ${!CLI_DIR}
+            curl -sL ${!LATEST_RELEASE} -o ${!CLI_DIR}/docker-compose
+            chmod +x ${!CLI_DIR}/docker-compose
+            ln -s ${!CLI_DIR}/docker-compose /usr/bin/docker-compose
+            ## Run Docker Container
+            docker container run --name nginx --restart=always -d -p 80:80 nginx
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 8
+              VolumeType: gp3
+
+  ## EC2: Contents EC2 TargetGroup
+  ContentsTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      Name: !Sub ${SystemName}-contentsec2-tg
+      Port: 80
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher: 
+        HttpCode: 200
+      Tags: 
+        - Key: Name
+          Value: !Sub ${SystemName}-contentsec2-tg
+
+  ## EC2: ALB Listener
+  ALBListener: 
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties: 
+      DefaultActions:
+        - TargetGroupArn: !Ref ContentsTargetGroup
+          Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref ContentsTargetGroup
+      LoadBalancerArn: 
+        Fn::ImportValue: !Sub ${SystemName}-elb-ELB
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates: 
+        - CertificateArn: 
+            Fn::ImportValue: !Sub ${SystemName}-certificatemanager-Certificate
+
+  ## EC2: ALB ListenerRule
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - TargetGroupArn: 
+            Fn::ImportValue: !Sub ${SystemName}-manageec2-ManageTargetGroup
+          Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn:
+                  Fn::ImportValue: !Sub ${SystemName}-manageec2-ManageTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - !Sub /${ManageEC2UrlPath}/*
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+
+  ## EC2: Contents EC2 Auto Scaling group
+  ContentsAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${SystemName}-contentsec2-autoscalinggroup
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetProtectedA
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetProtectedC
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ContentsLaunchTemplate
+        Version: !GetAtt ContentsLaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref ContentsTargetGroup
+      DesiredCapacity: 2
+      MaxSize: 6
+      MinSize: 2
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-asg-contentsec2
+          PropagateAtLaunch: true
+
+  ## EC2: Scaling Policy CPU Tracking
+  CPUTrackingScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref ContentsAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 20
+
+  ## EC2: AutoScaling Daytime Scheduled Action
+  DaytimeScheduledAction:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref ContentsAutoScalingGroup
+      DesiredCapacity: 4
+      MaxSize: 6
+      MinSize: 4
+      Recurrence: 0 9 * * *
+      TimeZone: Japan
+
+  ## EC2: AutoScaling Nighttime Scheduled Action
+  NighttimeScheduledAction:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref ContentsAutoScalingGroup
+      DesiredCapacity: 2
+      MaxSize: 6
+      MinSize: 2
+      Recurrence: 0 18 * * *
+      TimeZone: Japan
+
+
+Outputs:
+  ## EC2: contentsEC2 Security Group
+  ContentsEC2SecurityGroup:
+    Value: !Ref ContentsEC2SecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ContentsEC2SecurityGroup
+
+  ContentsEC2SecurityGroupVpcId:
+    Value: !GetAtt ContentsEC2SecurityGroup.VpcId
+    Export:
+      Name: !Sub ${AWS::StackName}-ContentsEC2SecurityGroupVpcId
+
+  ## EC2: Contents EC2 Launch template
+  ContentsLaunchTemplate:
+    Value: !Ref ContentsLaunchTemplate 
+    Export:
+      Name: !Sub ${AWS::StackName}-ContentsLaunchTemplate
+
+  ## EC2: Contents EC2 TargetGroup
+  ContentsTargetGroup:
+    Value: !Ref ContentsTargetGroup 
+    Export:
+      Name: !Sub ${AWS::StackName}-ContentsTargetGroup
+
+  ContentsTargetGroupFullName:
+    Value: !GetAtt ContentsTargetGroup.TargetGroupFullName
+    Export:
+      Name: !Sub ${AWS::StackName}-ContentsTargetGroupFullName
+
+  ## EC2: ALB Listener
+  ALBListener: 
+    Value: !Ref ALBListener 
+    Export:
+      Name: !Sub ${AWS::StackName}-ALBListener
+
+  ## EC2: ALB ListenerRule
+  ListenerRule:
+    Value: !Ref ListenerRule 
+    Export:
+      Name: !Sub ${AWS::StackName}-ListenerRule
+
+  ## EC2: Contents EC2 Auto Scaling group
+  ContentsAutoScalingGroup:
+    Value: !Ref ContentsAutoScalingGroup 
+    Export:
+      Name: !Sub ${AWS::StackName}-ContentsAutoScalingGroup
+
+  ## EC2: Scaling Policy CPU Tracking
+  CPUTrackingScalingPolicy:
+    Value: !Ref CPUTrackingScalingPolicy 
+    Export:
+      Name: !Sub ${AWS::StackName}-CPUTrackingScalingPolicy
+
+  CPUTrackingScalingPolicyName:
+    Value: !GetAtt CPUTrackingScalingPolicy.PolicyName
+    Export:
+      Name: !Sub ${AWS::StackName}-CPUTrackingScalingPolicyName
+
+  ## EC2: AutoScaling Daytime Scheduled Action
+  DaytimeScheduledAction:
+    Value: !Ref DaytimeScheduledAction 
+    Export:
+      Name: !Sub ${AWS::StackName}-DaytimeScheduledAction
+
+  DaytimeScheduledActionName:
+    Value: !GetAtt DaytimeScheduledAction.ScheduledActionName
+    Export:
+      Name: !Sub ${AWS::StackName}-DaytimeScheduledActionName
+
+  ## EC2: AutoScaling Nighttime Scheduled Action
+  NighttimeScheduledAction:
+    Value: !Ref NighttimeScheduledAction 
+    Export:
+      Name: !Sub ${AWS::StackName}-NighttimeScheduledAction
+
+  NighttimeScheduledActionName:
+    Value: !GetAtt NighttimeScheduledAction.ScheduledActionName
+    Export:
+      Name: !Sub ${AWS::StackName}-NighttimeScheduledActionName
+
+
+

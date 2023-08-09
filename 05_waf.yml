@@ -1,0 +1,61 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create WAF WebACL etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+
+Resources:
+  ## WAF: Sample Web ACL
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties: 
+      Name: !Sub ${SystemName}-waf-webacl
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        SampledRequestsEnabled: true
+        MetricName: !Sub ${SystemName}-waf-webacl
+      Rules:
+        - Name: !Sub ${SystemName}-TestRule
+          Priority: 1
+          Statement:
+            ByteMatchStatement:
+              FieldToMatch:
+                Headers:
+                  MatchPattern:
+                    IncludedHeaders:
+                      - User-Agent
+                  MatchScope: ALL
+                  OversizeHandling: MATCH
+              SearchString: BadUser
+              PositionalConstraint: EXACTLY
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          Action:
+            Count: {}
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            SampledRequestsEnabled: true
+            MetricName: !Sub ${SystemName}-waf-webacl-TestRule
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-waf-webacl
+
+Outputs:
+  ## WAF: WebACL
+  WebACL:
+    Value: !Ref WebACL
+    Export:
+      Name: !Sub ${AWS::StackName}-WebACL
+
+  WebACLArn:
+    Value: !GetAtt WebACL.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-WebACLArn

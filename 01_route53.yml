@@ -1,0 +1,83 @@
+---
+### [Change System Name] example
+### [Change Domain Name] example.jp
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create Route53 HostedZone etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example ### [Change System Name]
+  DomainName:
+    Description: Domain name
+    Type: String
+    Default: example.jp ### [Change Domain Name]
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Parameters:
+          - SystemName
+          - DomainName
+
+Resources:
+  ## Hosted Zone
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub ${SystemName}-hostedzone
+      HostedZoneTags:
+        - Key: Name
+          Value: !Sub ${SystemName}-hostedzone
+
+  ## Record Set: CAA
+  RecordSetCaa:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: CAA
+      ResourceRecords:
+        - '0 issue "amazon.com"'
+      TTL: 3600
+
+Outputs:
+  ## Hosted Zone
+  HostedZone:
+    Value: !Ref HostedZone
+    Export:
+      Name: !Sub ${AWS::StackName}-HostedZone
+
+  HostedZoneDomainName:
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub ${AWS::StackName}-HostedZoneDomainName
+
+  HostedZoneNameServer1:
+    Value: !Select [ 0, !GetAtt HostedZone.NameServers ]
+    Export:
+      Name: !Sub ${AWS::StackName}-HostedZoneNameServer1
+
+  HostedZoneNameServer2:
+    Value: !Select [ 1, !GetAtt HostedZone.NameServers ]
+    Export:
+      Name: !Sub ${AWS::StackName}-HostedZoneNameServer2
+
+  HostedZoneNameServer3:
+    Value: !Select [ 2, !GetAtt HostedZone.NameServers ]
+    Export:
+      Name: !Sub ${AWS::StackName}-HostedZoneNameServer3
+
+  HostedZoneNameServer4:
+    Value: !Select [ 3, !GetAtt HostedZone.NameServers ]
+    Export:
+      Name: !Sub ${AWS::StackName}-HostedZoneNameServer4
+
+  ## Record Set: CAA
+  RecordSetCaa:
+    Value: !Ref RecordSetCaa
+    Export:
+      Name: !Sub ${AWS::StackName}-RecordSetCaa

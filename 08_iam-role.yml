@@ -1,0 +1,207 @@
+---
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-s3
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create IAM Role etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+  ContentsOriginPrefix:
+    Description: S3 bucket Prefix to put static contents.
+    Type: String
+    Default: contents
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Parameters:
+          - SystemName
+          - ContentsOriginPrefix
+
+Resources:
+  ## IAM: Managed Policy (ManageEC2operateS3policy)
+  ManageEC2operateS3policy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: ManageEC2operateS3policy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: 
+              Fn::ImportValue: !Sub ${SystemName}-s3-S3bucketArn
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: 
+              - !Sub 
+                - '${S3Arn}/*'
+                - S3Arn: {'Fn::ImportValue': !Sub '${SystemName}-s3-S3bucketArn'}
+          - Effect: Allow
+            Action: s3:PutObject
+            Resource: 
+              - !Sub 
+                - '${S3Arn}/*'
+                - S3Arn: {'Fn::ImportValue': !Sub '${SystemName}-s3-S3bucketArn'}
+          - Effect: Allow
+            Action: s3:DeleteObject
+            Resource: 
+              - !Sub 
+                - '${S3Arn}/*'
+                - S3Arn: {'Fn::ImportValue': !Sub '${SystemName}-s3-S3bucketArn'}
+
+  ## IAM: Managed Policy (ContentsEC2operateS3policy)
+  EC2operateS3policy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: EC2operateS3policy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: 
+              Fn::ImportValue: !Sub ${SystemName}-s3-S3bucketArn
+            Condition:
+              StringLike:
+                s3:prefix: !Sub "${ContentsOriginPrefix}/*" 
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: 
+              - !Sub 
+                - '${S3Arn}/${ContentsOriginPrefix}/*'
+                - S3Arn: {'Fn::ImportValue': !Sub '${SystemName}-s3-S3bucketArn'}
+
+  ## IAM: Role (AmazonRDSEnhancedMonitoringRole)
+  AmazonRDSEnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AmazonRDSEnhancedMonitoringRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+
+  ## IAM: Role (ManageEC2IAMRole)
+  ManageEC2IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SystemName}-manage-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - Ref: ManageEC2operateS3policy
+
+  ## IAM: Role (EC2IAMRole)
+  EC2IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SystemName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - Ref: EC2operateS3policy
+
+  ## IAM: Instance Profile (ManageEC2IAMRole)
+  ManageEC2IAMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Ref ManageEC2IAMRole
+      Roles:
+        - !Ref ManageEC2IAMRole
+
+  ## IAM: Instance Profile (EC2IAMRole)
+  EC2IAMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Ref EC2IAMRole
+      Roles:
+        - !Ref EC2IAMRole
+
+Outputs:
+  ## IAM: Managed Policy (ManageEC2operateS3policy)
+  ManageEC2operateS3policy:
+    Value: !Ref ManageEC2operateS3policy
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2operateS3policy
+
+  ## IAM: Managed Policy (EC2operateS3policy)
+  EC2operateS3policy:
+    Value: !Ref EC2operateS3policy
+    Export:
+      Name: !Sub ${AWS::StackName}-EC2operateS3policy
+
+  ## IAM: Role (AmazonRDSEnhancedMonitoringRole)
+  AmazonRDSEnhancedMonitoringRole:
+    Value: !Ref AmazonRDSEnhancedMonitoringRole
+    Export:
+      Name: !Sub ${AWS::StackName}-AmazonRDSEnhancedMonitoringRole
+
+  AmazonRDSEnhancedMonitoringRoleArn:
+    Value: !GetAtt AmazonRDSEnhancedMonitoringRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-AmazonRDSEnhancedMonitoringRoleArn
+
+  ## IAM: Role (ManageEC2IAMRole)
+  ManageEC2IAMRole:
+    Value: !Ref ManageEC2IAMRole
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2IAMRole
+
+  ManageEC2IAMRoleArn:
+    Value: !GetAtt ManageEC2IAMRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2IAMRoleArn
+
+  ## IAM: Role (EC2IAMRole)
+  EC2IAMRole:
+    Value: !Ref EC2IAMRole
+    Export:
+      Name: !Sub ${AWS::StackName}-EC2IAMRole
+
+  EC2IAMRoleArn:
+    Value: !GetAtt EC2IAMRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-EC2IAMRoleArn
+
+  ## IAM: Instance Profile (ManageEC2IAMRole)
+  ManageEC2IAMInstanceProfile:
+    Value: !Ref ManageEC2IAMInstanceProfile
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2IAMInstanceProfile
+
+  ManageEC2IAMInstanceProfileArn:
+    Value: !GetAtt ManageEC2IAMInstanceProfile.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ManageEC2IAMInstanceProfileArn
+
+  ## IAM: Instance Profile (EC2IAMRole)
+  EC2IAMInstanceProfile:
+    Value: !Ref EC2IAMInstanceProfile
+    Export:
+      Name: !Sub ${AWS::StackName}-EC2IAMInstanceProfile
+
+  EC2IAMInstanceProfileArn:
+    Value: !GetAtt EC2IAMInstanceProfile.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-EC2IAMInstanceProfileArn

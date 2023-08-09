@@ -1,0 +1,45 @@
+---
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-route53
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create Certificate
+
+Parameters:
+  SystemName:
+    Description: System name
+    Type: String
+    Default: example ### [Change System Name]
+  DomainName:
+    Description: Domain name
+    Type: String
+    Default: example.com ### [Change Domain Name]
+
+Resources:
+  ## Certificate
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub "*.${DomainName}"
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-certificate-${AWS::Region}
+      ValidationMethod: DNS
+
+Outputs:
+  ## Certificate
+  Certificate:
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub ${AWS::StackName}-Certificate
+
+  CertificateDomainName:
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub ${AWS::StackName}-CertificateDomainName
+
+  CertificateSubjectAlternativeName1:
+    Value: !Sub "*.${DomainName}"
+    Export:
+      Name: !Sub ${AWS::StackName}-CertificateSubjectAlternativeName1

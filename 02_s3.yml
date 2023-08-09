@@ -1,0 +1,37 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create S3 bucket.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+
+Resources:
+  ## S3: Bucket
+  S3bucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Sub contents-origin-${AWS::AccountId}-${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-contents-origin-S3bucket
+
+Outputs:
+  ## S3: Bucket
+  S3bucket:
+    Value: !Ref S3bucket
+    Export: 
+      Name: !Sub ${AWS::StackName}-S3bucket
+
+  S3bucketDomainName:
+    Value: !GetAtt S3bucket.DomainName
+    Export: 
+      Name: !Sub ${AWS::StackName}-S3bucketDomainName
+
+  S3bucketArn:
+    Value: !GetAtt S3bucket.Arn
+    Export: 
+      Name: !Sub ${AWS::StackName}-S3bucketArn
+

@@ -1,0 +1,116 @@
+---
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-vpc
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create Redis Cluster etc.
+
+Mappings:
+  SystemNameMap:
+    example: ### Type System Name
+      PreferredMaintenanceWindow: tue:16:15-tue:17:15
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+
+Resources:
+  ## EC2(VPC): Security Group
+  ElastiCacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${SystemName}-elasticache-sg
+      GroupDescription: !Sub ${SystemName}-elasticache-sg
+      VpcId:
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-elasticache-sg
+          
+  ## ElastiCache: ElastiCache Subnet Group
+  ElastiCacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties: 
+      CacheSubnetGroupName: !Sub ${SystemName}-elasticache-subgrp
+      Description: !Sub ${SystemName}-elasticache-subgrp
+      SubnetIds: 
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetPrivateA
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetPrivateC
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-elasticache-subgrp
+
+  ## ElastiCache: ElastiCache Cluster
+  ElastiCacheCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub ${SystemName}-elasticache
+      ReplicationGroupDescription: ElastiCache Redis Cluster
+      MultiAZEnabled: true
+      CacheNodeType: cache.t3.small
+      Engine: redis
+      EngineVersion: 7.0
+      NumNodeGroups: 2
+      ReplicasPerNodeGroup: 1
+      NodeGroupConfiguration:
+        - NodeGroupId: 1
+          PrimaryAvailabilityZone: !Sub ${AWS::Region}a
+          ReplicaAvailabilityZones:
+            - !Sub ${AWS::Region}c
+        - NodeGroupId: 2
+          PrimaryAvailabilityZone: !Sub ${AWS::Region}c
+          ReplicaAvailabilityZones:
+            - !Sub ${AWS::Region}a
+      CacheSubnetGroupName: !Ref ElastiCacheSubnetGroup
+      SecurityGroupIds: 
+        - !Ref ElastiCacheSecurityGroup
+      Port: 6379
+      AutomaticFailoverEnabled: true
+      PreferredMaintenanceWindow: !FindInMap [ SystemNameMap, !Ref SystemName, PreferredMaintenanceWindow ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-elasticache-subgrp
+
+
+Outputs:
+  ## EC2(VPC): Security Group
+  ElastiCacheSecurityGroup:
+    Value: !Ref ElastiCacheSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ElastiCacheSecurityGroup
+
+  ElastiCacheSecurityGroupVpcId:
+    Value: !GetAtt ElastiCacheSecurityGroup.VpcId
+    Export:
+      Name: !Sub ${AWS::StackName}-ElastiCacheSecurityGroupVpcId
+
+  ## ElastiCache: ElastiCache Subnet Group
+  ElastiCacheSubnetGroup:
+    Value: !Ref ElastiCacheSubnetGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ElastiCacheSubnetGroup
+
+  ## ElastiCache: ElastiCache Cluster
+  ElastiCacheCluster:
+    Value: !Ref ElastiCacheCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-ElastiCacheCluster
+
+  ElastiCacheClusterEndPointAddress:
+    Value: !GetAtt ElastiCacheCluster.ConfigurationEndPoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-ElastiCacheClusterEndPointAddress
+
+  ElastiCacheClusterEndPointPort:
+    Value: !GetAtt ElastiCacheCluster.ConfigurationEndPoint.Port
+    Export:
+      Name: !Sub ${AWS::StackName}-ElastiCacheClusterEndPointPort
+
+
+
+
+  
+
+  
+

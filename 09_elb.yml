@@ -1,0 +1,109 @@
+---
+## The following CFn stack must be created first in order to be referenced by the ImportValue function.
+## 1. ${SystemName}-vpc
+## 2. ${SystemName}-route53
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create ELB etc.
+
+Parameters:
+  SystemName:
+    Description: System Name
+    Type: String
+    Default: example
+  SubDomain:
+    Description: Sub Domain
+    Type: String
+    Default: origin
+    AllowedPattern: ^[^.]*$
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Parameters:
+          - SystemName
+          - SubDomain
+
+Resources:
+  ## EC2(VPC): Security Group
+  ELBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${SystemName}-elb-sg
+      GroupDescription: !Sub ${SystemName}-elb-sg
+      VpcId:
+        Fn::ImportValue: !Sub ${SystemName}-vpc-VPC
+      SecurityGroupIngress: 
+        - SourcePrefixListId: pl-58a04531
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      Tags:
+        - Key: Name
+          Value: !Sub ${SystemName}-elb-sg
+
+  ## EC2: LoadBalancer
+  ELB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${SystemName}-ELB
+      Subnets:
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetPublicA
+        - Fn::ImportValue: !Sub ${SystemName}-vpc-SubnetPublicC
+      SecurityGroups:
+        - !Ref ELBSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !Sub ${SystemName}-ELB
+
+  ## Route 53: Record Set (A:ELB)
+  RecordSetAELB:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: 
+        Fn::ImportValue: !Sub ${SystemName}-route53-HostedZone
+      Name: !Sub
+          - "${SubDomain}.${DomainName}."
+          - DomainName:
+              Fn::ImportValue: !Sub ${SystemName}-route53-HostedZoneDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ELB.DNSName
+        HostedZoneId: !GetAtt ELB.CanonicalHostedZoneID
+
+Outputs:
+  ## EC2(VPC): Security Group
+  ELBSecurityGroup:
+    Value: !Ref ELBSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ELBSecurityGroup
+
+  ELBSecurityGroupVpcId:
+    Value: !GetAtt ELBSecurityGroup.VpcId
+    Export:
+      Name: !Sub ${AWS::StackName}-ELBSecurityGroupVpcId
+
+  ## EC2: LoadBalancer
+  ELB:
+    Value: !Ref ELB
+    Export:
+      Name: !Sub ${AWS::StackName}-ELB
+
+  ELBCanonicalHostedZoneID:
+    Value: !GetAtt ELB.CanonicalHostedZoneID
+    Export:
+      Name: !Sub ${AWS::StackName}-ELBCanonicalHostedZoneID
+
+  ELBDNSName:
+    Value: !GetAtt ELB.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-ELBDNSName
+
+  ELBFullName:
+    Value: !GetAtt ELB.LoadBalancerFullName
+    Export:
+      Name: !Sub ${AWS::StackName}-ELBFullName
+
+
+
+
+
